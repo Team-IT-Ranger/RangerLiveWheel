@@ -595,12 +595,23 @@ function switchTab(name){
   document.getElementById('tab-'+name).classList.add('active');
 }
 
+/*
 async function callAPI(body){
   const q=new URLSearchParams(body);
   const res=await fetch(`${ADMIN_CONFIG.APPS_SCRIPT_URL}?${q}`,{method:'GET'});
   return res.json();
 }
-
+*/
+async function callAPI(body){
+  const params = new URLSearchParams();
+  Object.entries(body).forEach(([k,v]) => params.append(k, v));
+  const res = await fetch(
+    `${ADMIN_CONFIG.APPS_SCRIPT_URL}?${params.toString()}`,
+    { method: 'GET' }
+  );
+  return res.json();
+}
+  
 function closeModal(id){document.getElementById(id).classList.remove('active')}
 function showToast(msg,type='success'){
   const t=document.getElementById('toast');t.textContent=msg;t.className=`toast ${type} show`;
