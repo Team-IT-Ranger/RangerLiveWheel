@@ -369,7 +369,8 @@ let cancelTargetId=null, qrCountdownTimer=null, currentQrExpiry=null;
 // AUTH
 // =====================================================
 function login(){
-  ADMIN_CONFIG.PASSWORD=document.getElementById('pw-input').value;
+  const pw = document.getElementById('pw-input').value;
+  ADMIN_CONFIG.PASSWORD = pw;
   document.getElementById('login-error').style.display='none';
   loadStats();
 }
