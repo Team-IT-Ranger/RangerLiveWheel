@@ -627,7 +627,7 @@ async function callAPI(body){
   
   // แสดง URL ที่ส่งจริง
   console.log('URL:', fullUrl);
-  document.getElementById('login-showpw').textContent = fullUrl;
+  //document.getElementById('login-showpw').textContent = fullUrl;
 
   const res = await fetch(fullUrl, { method: 'GET' });
   return res.json();
