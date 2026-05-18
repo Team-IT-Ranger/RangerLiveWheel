@@ -356,9 +356,13 @@ function startTokenCountdown(expiryTs, totalMs){
 // =====================================================
 // INIT
 // =====================================================
+/*
 window.addEventListener('load',async()=>{
   initStars();
-  await new Promise(r=>setTimeout(r,2000));
+
+  showScreen('loading');
+  
+  await new Promise(r=>setTimeout(r, 0));
   if(CONFIG.DEMO_MODE){
     lineUserId='DEMO_'+Math.random().toString(36).substr(2,8);
     const expMs=5*60*1000;
@@ -394,7 +398,38 @@ async function initGame(){
     drawWheel();renderPrizeList();showScreen('wheel');
   }catch(e){showError('ไม่สามารถโหลดข้อมูลได้<br>'+e.message)}
 }
+*/
+window.addEventListener('load', async () => {
+  initStars();
+  
+  // ✅ แสดง loading ทันที ไม่ต้องรอ 2 วิ
+  showScreen('loading');
 
+  // โหลด LIFF และ API พร้อมกัน
+  if (CONFIG.DEMO_MODE) {
+    lineUserId = 'DEMO_' + Math.random().toString(36).substr(2,8);
+    const expMs = 5*60*1000;
+    startTokenCountdown(Date.now()+expMs, expMs);
+    drawWheel(); renderPrizeList(); showScreen('wheel');
+  } else {
+    try {
+      // ✅ init LIFF และ pre-draw wheel พร้อมกัน
+      const [liffReady] = await Promise.all([
+        liff.init({ liffId: CONFIG.LIFF_ID }),
+        new Promise(r => { drawWheel(); renderPrizeList(); r(); })
+      ]);
+
+      if (!liff.isLoggedIn()) { liff.login(); return; }
+
+      const profile = await liff.getProfile();
+      lineUserId = profile.userId;
+      await initGame();
+    } catch(e) {
+      showError('ไม่สามารถเชื่อมต่อ Line ได้<br>' + e.message);
+    }
+  }
+});
+  
 function updatePrizes(data){data.forEach(p=>{const f=PRIZES.find(x=>x.id===p.id);if(f)f.remaining=p.remaining})}
 
 // =====================================================
