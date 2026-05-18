@@ -378,7 +378,8 @@ window.addEventListener('load',async()=>{
     }catch(e){showError('ไม่สามารถเชื่อมต่อ Line ได้<br>'+e.message)}
   }
 });
-
+*/
+  
 async function initGame(){
   try{
     const token=getToken();
@@ -398,7 +399,7 @@ async function initGame(){
     drawWheel();renderPrizeList();showScreen('wheel');
   }catch(e){showError('ไม่สามารถโหลดข้อมูลได้<br>'+e.message)}
 }
-*/
+
 window.addEventListener('load', async () => {
   initStars();
   
