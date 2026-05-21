@@ -189,20 +189,15 @@
     <div class="wheel-center">SPIN<br>NOW</div>
   </div>
   <button class="spin-btn" id="spinBtn" onclick="startSpin()">🎰 แตะหมุนล้อตรงนี้จ้า!</button>
+  <div id="api-status" style="display:none;font-size:0.8rem;color:rgba(255,255,255,0.5);margin-top:6px;font-family:'Sarabun',sans-serif;animation:pulse 1s ease-in-out infinite">⏳ กำลังตรวจสอบผล...</div>
   <!--
   <div class="prizes-section">
-    <div class="prizes-title">ร า ง วั ล ทั้ ง ห ม ด</div>
+    <div class="prizes-title">รางวัลทั้งหมด</div>
     <div id="prizes-list"></div>
   </div>
   -->
 </div>
 
-<!-- SPINNING -->
-<div class="screen hidden" id="screen-spinning">
-  <div class="spinning-anim">🎡</div>
-  <div class="spinning-text">กำลังหมุนวงล้อ...</div>
-  <div class="spinning-sub">โชคดีนะครับ! 🍀</div>
-</div>
 
 <!-- RESULT -->
 <div class="screen hidden" id="screen-result">
@@ -211,6 +206,7 @@
   <div class="result-inner">
     <div class="result-congrats">🎉 ยินดีด้วย! 🎉</div>
     <div class="result-title">คุณได้รับรางวัล!</div>
+    <div id="result-spin-number" style="display:none;background:rgba(255,215,0,0.12);border:1px solid rgba(255,215,0,0.35);border-radius:20px;padding:4px 16px;font-size:0.85rem;color:var(--gold);font-weight:700;letter-spacing:1px"></div>
     <div class="result-prize-card">
       <span class="result-prize-emoji" id="result-emoji">🎁</span>
       <div class="result-prize-label">รางวัลของคุณ</div>
@@ -247,7 +243,7 @@
 // CONFIG — แก้ตามระบบจริง
 // =====================================================
 // Lucky Wheel
-/*
+
 const CONFIG = {
   // ← ใส่ LIFF ID จาก Line Developers
   LIFF_ID: '2010096405-zr8CsSer',
@@ -258,15 +254,14 @@ const CONFIG = {
   // ← true = ทดสอบโดยไม่ต้องมี LIFF/API จริง, เปลี่ยนเป็น false เวลา deploy จริง
   DEMO_MODE: true
 };
-*/
-  
+
 // Live Wheel
-const CONFIG = {
+/*const CONFIG = {
   LIFF_ID: '2010102212-BxhzRPQ9',
   APPS_SCRIPT_URL: 'https://script.google.com/macros/s/AKfycbyi4G4kURShP-wks_KLkVn6_j3R_K0oyfefHpAFWAN4_QXK7BBL-DExTOvrZusyBv62Pw/exec',
   DEMO_MODE: true
 };
-
+*/
   
 const PRIZES = [
   {id:1,name:'Live Ad or Creative Ad',desc:'มูลค่า 500 บาท',emoji:'📺',color:'#FFD700',total:30,remaining:30},
@@ -297,15 +292,98 @@ function playTone(freq,dur,type='sine',vol=0.3,delay=0){
   }catch(e){}
 }
 
-function playSpinSound(){
-  let delay=0;
-  for(let i=0;i<45;i++){
-    const p=i/45;
-    const gap=p<0.5?0.05-p*0.04:0.01+(p-0.5)*0.18;
-    delay+=gap;
-    playTone(700+Math.random()*300,0.04,'square',0.12,delay);
-  }
+// =====================================================
+// 🚂 TRAIN SOUND ENGINE
+// =====================================================
+let _chugInterval=null;
+
+// เสียง chug หนึ่งครั้ง — noise burst สั้นๆ คล้ายล้อรถไฟ
+function playChug(vol=0.18){
+  if(!soundEnabled)return;
+  try{
+    const ctx=getCtx();
+    // White noise via buffer
+    const bufSize=ctx.sampleRate*0.06;
+    const buf=ctx.createBuffer(1,bufSize,ctx.sampleRate);
+    const data=buf.getChannelData(0);
+    for(let i=0;i<bufSize;i++) data[i]=(Math.random()*2-1);
+    const src=ctx.createBufferSource();
+    src.buffer=buf;
+
+    // BandPass ให้ฟังดูเป็น mechanical thud
+    const bp=ctx.createBiquadFilter();
+    bp.type='bandpass'; bp.frequency.value=180; bp.Q.value=1.2;
+
+    const gain=ctx.createGain();
+    gain.gain.setValueAtTime(vol,ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001,ctx.currentTime+0.06);
+
+    src.connect(bp); bp.connect(gain); gain.connect(ctx.destination);
+    src.start(); src.stop(ctx.currentTime+0.07);
+
+    // เสียงตุ้ม low thud ซ้อน
+    const osc=ctx.createOscillator(), og=ctx.createGain();
+    osc.type='sine'; osc.frequency.value=90;
+    og.gain.setValueAtTime(vol*0.6,ctx.currentTime);
+    og.gain.exponentialRampToValueAtTime(0.001,ctx.currentTime+0.08);
+    osc.connect(og); og.connect(ctx.destination);
+    osc.start(); osc.stop(ctx.currentTime+0.08);
+  }catch(e){}
 }
+
+// เสียงหวีด ปู๊น! (รถไฟเบรก)
+function playTrainWhistle(){
+  if(!soundEnabled)return;
+  try{
+    const ctx=getCtx();
+    // หวีดสูง ลดระดับลง
+    const freqs=[880,1100,660];
+    freqs.forEach((f,i)=>{
+      const osc=ctx.createOscillator(), g=ctx.createGain();
+      osc.type='sawtooth'; osc.frequency.value=f;
+      osc.frequency.exponentialRampToValueAtTime(f*0.7, ctx.currentTime+0.8);
+      g.gain.setValueAtTime(0.0,ctx.currentTime+i*0.05);
+      g.gain.linearRampToValueAtTime(0.22-i*0.04, ctx.currentTime+i*0.05+0.05);
+      g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime+0.9);
+      osc.connect(g); g.connect(ctx.destination);
+      osc.start(ctx.currentTime+i*0.05);
+      osc.stop(ctx.currentTime+1.0);
+    });
+  }catch(e){}
+}
+
+// เริ่มเสียง chug-chug ต่อเนื่อง (เรียกตอนเริ่ม free spin)
+function startChugLoop(initialIntervalMs=140){
+  stopChugLoop();
+  let interval=initialIntervalMs;
+  playChug(0.15);
+  _chugInterval=setInterval(()=>{
+    playChug(0.18);
+  }, interval);
+}
+
+// เร่งเสียง chug (ตอนล้อเร็วขึ้น)
+function setChugSpeed(intervalMs){
+  if(!_chugInterval)return;
+  stopChugLoop();
+  _chugInterval=setInterval(()=>playChug(0.2), Math.max(intervalMs,60));
+}
+
+function stopChugLoop(){
+  if(_chugInterval){clearInterval(_chugInterval);_chugInterval=null;}
+}
+
+// เสียงประกอบตอน snap (ช้าลง → หวีด)
+function playSpinSound(){
+  stopChugLoop();
+  // เสียง chug ช้าลง 5 ครั้ง
+  [0,0.18,0.38,0.62,0.9].forEach((t,i)=>{
+    setTimeout(()=>playChug(0.15-i*0.02), t*1000);
+  });
+  // หวีดปู๊นตอนจวนจะหยุด
+  setTimeout(()=>playTrainWhistle(), 600);
+}
+
 
 function playWinSound(id){
   if(id===1){
@@ -358,13 +436,9 @@ function startTokenCountdown(expiryTs, totalMs){
 // =====================================================
 // INIT
 // =====================================================
-/*
 window.addEventListener('load',async()=>{
   initStars();
-
-  showScreen('loading');
-  
-  await new Promise(r=>setTimeout(r, 0));
+  await new Promise(r=>setTimeout(r,2000));
   if(CONFIG.DEMO_MODE){
     lineUserId='DEMO_'+Math.random().toString(36).substr(2,8);
     const expMs=5*60*1000;
@@ -380,8 +454,7 @@ window.addEventListener('load',async()=>{
     }catch(e){showError('ไม่สามารถเชื่อมต่อ Line ได้<br>'+e.message)}
   }
 });
-*/
-  
+
 async function initGame(){
   try{
     const token=getToken();
@@ -402,37 +475,6 @@ async function initGame(){
   }catch(e){showError('ไม่สามารถโหลดข้อมูลได้<br>'+e.message)}
 }
 
-window.addEventListener('load', async () => {
-  initStars();
-  
-  // ✅ แสดง loading ทันที ไม่ต้องรอ 2 วิ
-  showScreen('loading');
-
-  // โหลด LIFF และ API พร้อมกัน
-  if (CONFIG.DEMO_MODE) {
-    lineUserId = 'DEMO_' + Math.random().toString(36).substr(2,8);
-    const expMs = 5*60*1000;
-    startTokenCountdown(Date.now()+expMs, expMs);
-    drawWheel(); renderPrizeList(); showScreen('wheel');
-  } else {
-    try {
-      // ✅ init LIFF และ pre-draw wheel พร้อมกัน
-      const [liffReady] = await Promise.all([
-        liff.init({ liffId: CONFIG.LIFF_ID }),
-        new Promise(r => { drawWheel(); renderPrizeList(); r(); })
-      ]);
-
-      if (!liff.isLoggedIn()) { liff.login(); return; }
-
-      const profile = await liff.getProfile();
-      lineUserId = profile.userId;
-      await initGame();
-    } catch(e) {
-      showError('ไม่สามารถเชื่อมต่อ Line ได้<br>' + e.message);
-    }
-  }
-});
-  
 function updatePrizes(data){data.forEach(p=>{const f=PRIZES.find(x=>x.id===p.id);if(f)f.remaining=p.remaining})}
 
 // =====================================================
@@ -477,7 +519,7 @@ function renderPrizeList(){
       <div class="prize-name">${p.emoji} ${p.name}</div>
       ${p.remaining===0?'<span class="prize-out-badge">หมดแล้ว</span>':`<span class="prize-count">${p.remaining}/${p.total}</span>`}
     </div>`).join('');
-  */  
+  */
 }
 
 // =====================================================
@@ -488,29 +530,94 @@ async function startSpin(){
   if(tokenExpiry&&Date.now()>tokenExpiry){showScreen('token-expired');return}
   isSpinning=true; playClick();
   document.getElementById('spinBtn').disabled=true;
+
   try{
     let prizeIndex;
+
     if(CONFIG.DEMO_MODE){
       prizeIndex=getDemoPrize();
       spinResult={...PRIZES[prizeIndex],rewardCode:genCode(PRIZES[prizeIndex])};
+      clearInterval(tokenTimer);
+      document.getElementById('tokenBarWrap').style.display='none';
+      playSpinSound();
+      await animateTo(prizeIndex);
+      playWinSound(spinResult.id);
+      showResult(spinResult);
     }else{
-      showScreen('spinning');
-      const token=getToken();
-      const res=await callAPI('spin',{userId:lineUserId,...(token?{token}:{})});
-      if(!res.success)throw new Error(res.message||'ไม่สามารถหมุนได้');
-      prizeIndex=PRIZES.findIndex(p=>p.id===res.prizeId);
-      spinResult={...PRIZES[prizeIndex],rewardCode:res.rewardCode};
-      showScreen('wheel');
+      // ── ตัวจริง: เริ่มหมุนวงล้อ + call API พร้อมกัน ──
+      clearInterval(tokenTimer);
+      document.getElementById('tokenBarWrap').style.display='none';
+
+      const token = getToken();
+
+      // แสดงข้อความรอเล็กๆ ใต้ปุ่ม
+      const statusEl = document.getElementById('api-status');
+      if(statusEl) statusEl.style.display='block';
+
+      // หมุนล้อ "ไม่รู้ผล" ก่อน (random ช้าๆ อย่างน้อย MIN_SPIN_MS)
+      const MIN_SPIN_MS = 5000;
+      const apiPromise  = callAPI('spin',{userId:lineUserId,...(token?{token}:{})});
+      const spinPromise = animateIndefinite(); // หมุนแบบ free spin
+
+      // รอ API กลับมา (แต่อย่างน้อย MIN_SPIN_MS)
+      const [res] = await Promise.all([
+        apiPromise,
+        new Promise(r=>setTimeout(r, MIN_SPIN_MS))
+      ]);
+
+      if(!res.success) throw new Error(res.message||'ไม่สามารถหมุนได้');
+
+      // ซ่อนข้อความรอ
+      if(statusEl) statusEl.style.display='none';
+
+      prizeIndex = PRIZES.findIndex(p=>p.id===res.prizeId);
+      spinResult = {...PRIZES[prizeIndex], rewardCode:res.rewardCode, spinNumber:res.spinNumber};
+
+      // หยุด free spin แล้ว snap ไปที่ช่องที่ถูก
+      stopIndefinite();
+      playSpinSound();
+      await animateTo(prizeIndex);
+      playWinSound(spinResult.id);
+      showResult(spinResult);
     }
-    clearInterval(tokenTimer);
-    document.getElementById('tokenBarWrap').style.display='none';
-    playSpinSound();
-    await animateTo(prizeIndex);
-    playWinSound(spinResult.id);
-    showResult(spinResult);
-  }catch(e){showError(e.message||'เกิดข้อผิดพลาด')}
-  finally{isSpinning=false}
+  }catch(e){
+    stopIndefinite();
+    const statusEl = document.getElementById('api-status');
+    if(statusEl) statusEl.style.display='none';
+    showError(e.message||'เกิดข้อผิดพลาด');
+  }finally{isSpinning=false}
 }
+
+// ── หมุนฟรีแบบต่อเนื่องจนกว่าจะสั่งหยุด ──
+let _freeSpinRaf=null, _freeSpinStop=false;
+function animateIndefinite(){
+  _freeSpinStop=false;
+  const canvas=document.getElementById('wheelCanvas');
+  canvas.classList.add('spinning');
+  startChugLoop(130); // เริ่มเสียง chug-chug
+  let last=null;
+  const RPM=1.8; // รอบต่อวินาที
+  const dps=RPM*360/1000; // องศา/ms
+  return new Promise(resolve=>{
+    function frame(ts){
+      if(last!==null){
+        const dt=ts-last;
+        wheelAngle+=(dps*dt)*(Math.PI/180);
+        drawWheel();
+      }
+      last=ts;
+      if(_freeSpinStop){canvas.classList.remove('spinning');resolve();return}
+      _freeSpinRaf=requestAnimationFrame(frame);
+    }
+    _freeSpinRaf=requestAnimationFrame(frame);
+  });
+}
+function stopIndefinite(){
+  _freeSpinStop=true;
+  if(_freeSpinRaf)cancelAnimationFrame(_freeSpinRaf);
+  stopChugLoop();
+}
+
 
 function getDemoPrize(){
   const w=[5,10,20,40,25],t=w.reduce((a,b)=>a+b,0);
@@ -530,19 +637,25 @@ function genCode(prize){
 function animateTo(prizeIndex){
   return new Promise(resolve=>{
     const arc=360/PRIZES.length;
-    const targetDeg=(5+Math.random()*3)*360-(prizeIndex*arc+arc/2);
+    // คำนวณมุมเป้าหมาย snap จากมุมปัจจุบันที่กำลังหมุน
+    const targetSlotDeg = prizeIndex*arc + arc/2;
+    const currentDeg    = ((wheelAngle*(180/Math.PI))%360+360)%360;
+    // หมุนเพิ่ม 2 รอบ แล้วหยุดที่ช่องที่ถูก (pointer อยู่บนสุด = 360-targetSlotDeg)
+    const stopAt  = (360-targetSlotDeg+360)%360;
+    const needed  = (stopAt - currentDeg + 360*3)%360 + 360*4;
     const canvas=document.getElementById('wheelCanvas');
     canvas.classList.add('spinning');
     let t0=null;
-    const dur=4500,startDeg=wheelAngle*(180/Math.PI);
+    const dur=5000;
+    const startDeg=currentDeg;
     const ease=t=>1-Math.pow(1-t,4);
     function frame(ts){
       if(!t0)t0=ts;
       const prog=Math.min((ts-t0)/dur,1);
-      const deg=startDeg+targetDeg*ease(prog);
-      wheelAngle=deg*Math.PI/180; drawWheel();
+      const deg=startDeg+needed*ease(prog);
+      wheelAngle=deg*(Math.PI/180); drawWheel();
       if(prog<1)requestAnimationFrame(frame);
-      else{canvas.classList.remove('spinning');wheelAngle=((deg%360)*Math.PI/180);resolve()}
+      else{canvas.classList.remove('spinning');wheelAngle=(deg%360)*(Math.PI/180);resolve();}
     }
     requestAnimationFrame(frame);
   });
@@ -556,6 +669,9 @@ function showResult(prize){
   document.getElementById('result-prize-name').textContent=prize.name;
   document.getElementById('result-prize-desc').textContent=prize.desc;
   document.getElementById('result-code').textContent=prize.rewardCode;
+  const snEl=document.getElementById('result-spin-number');
+  if(prize.spinNumber){snEl.textContent=`🎯 การออกรางวัลครั้งที่ #${prize.spinNumber}`;snEl.style.display='block';}
+  else snEl.style.display='none';
   showScreen('result'); launchConfetti(); createFireworks();
 }
 
