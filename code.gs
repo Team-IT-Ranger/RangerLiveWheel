@@ -4,30 +4,45 @@
 // =====================================================
 
 // ===== CONFIG =====
-// ←Doc ID ของ Google Sheet
-const SHEET_ID = PropertiesService
-  .getScriptProperties()
-  .getProperty('SHEET_ID');
+const {
+  SHEET_FILEID,
+  LINE_CHANNEL_TOKEN  : LINE_CHANNEL_TOKEN,
+  LINE_GROUP_ID,
+  LINE_GROUP_ID1,
+  LINE_GROUP_ID2,
+  LINE_GROUP_ID3,
+  LINE_GROUP_ID4,
+  LINE_GROUP_ID5,
+  ADMIN_PASSWORD,
+} = PropertiesService.getScriptProperties().getProperties();
 
-//LINE_CHANNEL_ACCESS_TOKEN' (Line Messaging API Token)
-const LINE_CHANNEL_TOKEN = PropertiesService
-  .getScriptProperties()
-  .getProperty('LINE_TOKEN');
+function showLogConfig() {
+  console.log('=== Script properties ===');
+  console.log('SHEET_FILEID      :', SHEET_FILEID);
+  console.log('LINE_CHANNEL_TOKEN:', LINE_CHANNEL_TOKEN);
+  console.log('LINE_GROUP_ID     :', LINE_GROUP_ID);
+  console.log('LINE_GROUP_ID1    :', LINE_GROUP_ID1);
+  console.log('LINE_GROUP_ID2    :', LINE_GROUP_ID2);
+  console.log('LINE_GROUP_ID3    :', LINE_GROUP_ID3);
+  console.log('LINE_GROUP_ID4    :', LINE_GROUP_ID4);
+  console.log('LINE_GROUP_ID5    :', LINE_GROUP_ID5);
+  console.log('ADMIN_PASSWORD    :', ADMIN_PASSWORD);
+  console.log('==================');
+}
 
-// ← Group ID ของทีม Admin
-const LINE_GROUP_ID = PropertiesService
-  .getScriptProperties()
-  .getProperty('LINE_GROUP_ID');
+const LINE_GROUP_BY_PRIZE = {
+  1:  LINE_GROUP_ID1,
+  2:  LINE_GROUP_ID2,
+  3:  LINE_GROUP_ID3,
+  4:  LINE_GROUP_ID4,
+  5:  LINE_GROUP_ID5
+};
 
-const ADMIN_PASSWORD = PropertiesService
-  .getScriptProperties()
-  .getProperty('ADMIN_PASSWORD');
-
-const SHEET_PRIZES  = 'prizes';
-const SHEET_PLAYERS = 'players';
-const SHEET_CONFIG  = 'config';
-const SHEET_TOKENS  = 'tokens';
-const SHEET_LOG     = 'log';
+const SHEET_PRIZES        = 'prizes';
+const SHEET_PLAYERS       = 'players';
+const SHEET_CONFIG        = 'config';
+const SHEET_TOKENS        = 'tokens';
+const SHEET_LOG           = 'log';
 
 // =====================================================
 // ROUTING
@@ -35,7 +50,7 @@ const SHEET_LOG     = 'log';
 function doGet(e) {
   try {
     const action = e.parameter.action;
-    const pw     = e.parameter.pw;
+    const pw     = e.parameter.password || e.parameter.pw;
 
     // ── Admin routes ──
     if (action === 'admin') {
@@ -102,7 +117,7 @@ function checkPlayer(userId, token) {
   }
 
   // Check if already played
-  const ss = SpreadsheetApp.openById(SHEET_ID);
+  const ss = SpreadsheetApp.openById(SHEET_FILEID);
   const rows = ss.getSheetByName(SHEET_PLAYERS).getDataRange().getValues();
   for (let i = 1; i < rows.length; i++) {
     if (rows[i][0] === userId && rows[i][7] !== 'cancelled') {
@@ -129,7 +144,7 @@ function checkPlayer(userId, token) {
 function getPrizes() { return { success:true, prizes:getPrizesData() }; }
 
 function getPrizesData() {
-  const rows = SpreadsheetApp.openById(SHEET_ID)
+  const rows = SpreadsheetApp.openById(SHEET_FILEID)
     .getSheetByName(SHEET_PRIZES).getDataRange().getValues();
   return rows.slice(1).filter(r=>r[0]).map(r=>({
     id:r[0], name:r[1], desc:r[2], emoji:r[3], color:r[4],
@@ -159,7 +174,7 @@ function handleSpin(userId, token) {
     lock.waitLock(10000);
 
     // Double-check after lock
-    const recheck = SpreadsheetApp.openById(SHEET_ID)
+    const recheck = SpreadsheetApp.openById(SHEET_FILEID)
       .getSheetByName(SHEET_PLAYERS).getDataRange().getValues();
     for (let i = 1; i < recheck.length; i++) {
       if (recheck[i][0] === userId && recheck[i][7] !== 'cancelled') {
@@ -170,17 +185,18 @@ function handleSpin(userId, token) {
     const prize = pickPrize();
     if (!prize) return { success:false, message:'รางวัลหมดแล้ว ขอบคุณที่ร่วมกิจกรรม!' };
 
-    const rewardCode = generateRewardCode(prize.id);
-    savePlayerResult(userId, prize, rewardCode);
+    const rewardCode  = generateRewardCode(prize.id);
+    const spinNumber  = getNextSpinNumber();
+    savePlayerResult(userId, prize, rewardCode, spinNumber);
     decrementPrize(prize.id);
 
     // Notify Line Group (async-ish)
-    try { notifyLineGroup(userId, prize, rewardCode); } catch(e) { logAction('LINE_GROUP_ERROR', e.message); }
+    try { notifyLineGroup(userId, prize, rewardCode, spinNumber); } catch(e) { logAction('LINE_GROUP_ERROR', e.message); }
 
     // Send personal Line message
-    try { sendLineMessage(userId, prize, rewardCode); } catch(e) { logAction('LINE_MSG_ERROR', e.message); }
+    try { sendLineMessage(userId, prize, rewardCode, spinNumber); } catch(e) { logAction('LINE_MSG_ERROR', e.message); }
 
-    return { success:true, prizeId:prize.id, prizeName:prize.name, prizeDesc:prize.desc, rewardCode };
+    return { success:true, prizeId:prize.id, prizeName:prize.name, prizeDesc:prize.desc, rewardCode, spinNumber };
 
   } finally { lock.releaseLock(); }
 }
@@ -189,7 +205,7 @@ function handleSpin(userId, token) {
 // PRIZE SELECTION (Weighted)
 // =====================================================
 function pickPrize() {
-  const rows = SpreadsheetApp.openById(SHEET_ID)
+  const rows = SpreadsheetApp.openById(SHEET_FILEID)
     .getSheetByName(SHEET_PRIZES).getDataRange().getValues();
   const pool = [];
   for (let i = 1; i < rows.length; i++) {
@@ -212,17 +228,28 @@ function generateRewardCode(prizeId) {
   return code;
 }
 
-function savePlayerResult(userId, prize, rewardCode) {
-  SpreadsheetApp.openById(SHEET_ID)
+function getNextSpinNumber() {
+  const sheet = SpreadsheetApp.openById(SHEET_FILEID).getSheetByName(SHEET_PLAYERS);
+  const rows  = sheet.getDataRange().getValues();
+  // Count only active rows (not cancelled), excluding header
+  let count = 0;
+  for (let i = 1; i < rows.length; i++) {
+    if (rows[i][7] !== 'cancelled') count++;
+  }
+  return count + 1; // next number
+}
+
+function savePlayerResult(userId, prize, rewardCode, spinNumber) {
+  SpreadsheetApp.openById(SHEET_FILEID)
     .getSheetByName(SHEET_PLAYERS)
     .appendRow([
       userId, '', prize.name, rewardCode,
-      new Date(), prize.id, 'pending', 'active'  // col H = active/cancelled
+      new Date(), prize.id, 'pending', 'active', spinNumber  // col I = spinNumber
     ]);
 }
 
 function decrementPrize(prizeId) {
-  const sheet = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_PRIZES);
+  const sheet = SpreadsheetApp.openById(SHEET_FILEID).getSheetByName(SHEET_PRIZES);
   const rows = sheet.getDataRange().getValues();
   for (let i=1;i<rows.length;i++) {
     if (rows[i][0] == prizeId) {
@@ -241,11 +268,19 @@ function generateQRToken() {
   const expiry   = new Date(Date.now() + mins * 60 * 1000);
   const tokenStr = Utilities.getUuid().replace(/-/g,'').substr(0,16).toUpperCase();
 
-  SpreadsheetApp.openById(SHEET_ID)
+  SpreadsheetApp.openById(SHEET_FILEID)
     .getSheetByName(SHEET_TOKENS)
     .appendRow([tokenStr, expiry, 'active', new Date()]);
 
-  const liffBase = config.liffUrl || 'https://liff.line.me/YOUR_LIFF_ID';
+  // Live Wheel
+  /*
+  //  const liffBase = config.liffUrl || 'https://liff.line.me/2010102212-BxhzRPQ9';
+  */
+
+  // Lucky Wheel
+  /***/
+    const liffBase = config.liffUrl || 'https://liff.line.me/2010096405-zr8CsSer';
+
   const qrUrl    = `${liffBase}?token=${tokenStr}`;
 
   logAction('GEN_TOKEN', `Token: ${tokenStr}, Expiry: ${expiry}`);
@@ -262,7 +297,7 @@ function generateQRToken() {
 
 function validateToken(token) {
   if (!token) return { valid:false };
-  const sheet = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_TOKENS);
+  const sheet = SpreadsheetApp.openById(SHEET_FILEID).getSheetByName(SHEET_TOKENS);
   const rows  = sheet.getDataRange().getValues();
   for (let i=1;i<rows.length;i++) {
     if (rows[i][0] === token && rows[i][2] === 'active') {
@@ -283,46 +318,61 @@ function setTokenMins(mins) {
 // =====================================================
 function cancelPlayer(userId) {
   if (!userId) return { success:false, message:'No userId' };
-  const sheet = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_PLAYERS);
-  const rows  = sheet.getDataRange().getValues();
+  const playerSheet = SpreadsheetApp.openById(SHEET_FILEID).getSheetByName(SHEET_PLAYERS);
+  const prizeSheet  = SpreadsheetApp.openById(SHEET_FILEID).getSheetByName(SHEET_PRIZES);
+  const playerRows  = playerSheet.getDataRange().getValues();
   let found   = false;
 
-  for (let i=1;i<rows.length;i++) {
-    if (rows[i][0] === userId && rows[i][7] !== 'cancelled') {
-      sheet.getRange(i+1, 7).setValue('cancelled-by-admin'); // status col
-      sheet.getRange(i+1, 8).setValue('cancelled');           // active col
+  for (let i = 1; i < playerRows.length; i++) {
+    if (playerRows[i][0] === userId && playerRows[i][7] !== 'cancelled') {
+      playerSheet.getRange(i+1, 7).setValue('cancelled-by-admin'); // status col
+      playerSheet.getRange(i+1, 8).setValue('cancelled');           // active col
+      
+      SpreadsheetApp.flush(); //บังคับ write ให้เสร็จ
       // Give back prize count
-      const prizeId = rows[i][5];
-      const prizeSheet = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_PRIZES);
-      const prizeRows  = prizeSheet.getDataRange().getValues();
-      for (let j=1;j<prizeRows.length;j++) {
-        if (prizeRows[j][0] == prizeId) {
-          prizeSheet.getRange(j+1,7).setValue(Number(prizeRows[j][6])+1);
+      const prizeId     = playerRows[i][5];
+      const prizeName   = playerRows[i][2];
+      const prizeRows   = prizeSheet.getDataRange().getValues();
+
+      for (let j = 1; j < prizeRows.length; j++) {
+        if (String(prizeRows[j][0]) == String(prizeId)) {
+          const currentRemaining = Number(prizeRows[j][6]);
+          const total = Number(prizeRows[j][5]);
+          const newRemaining = Math.min(currentRemaining + 1, total);
+
+          prizeSheet.getRange(j+1,7).setValue(newRemaining);
+          SpreadsheetApp.flush();
+          logAction('ADMIN_CANCEL', `Cancelled: ${userId} | Prize: ${prizeName} (id:${prizeId}) | Remaining: ${currentRemaining} → ${newRemaining}`
+          );
           break;
         }
       }
       found = true;
-      logAction('ADMIN_CANCEL', `Cancelled player: ${userId}, Prize: ${rows[i][2]}`);
+      //logAction('ADMIN_CANCEL', `Cancelled player: ${userId}, Prize: ${rows[i][2]}`);
       break;
     }
   }
 
   if (!found) return { success:false, message:'ไม่พบผู้เล่นนี้ หรือถูกยกเลิกไปแล้ว' };
-  return { success:true, message:`ยกเลิกรายการของ ${userId} แล้ว ผู้เล่นสามารถเล่นใหม่ได้` };
+  return { success:true, message:`ยกเลิกรายการของ ${userId} แล้ว รางวัลถูกคืนเข้าระบบ ผู้เล่นสามารถเล่นใหม่ได้` };
 }
 
 // =====================================================
 // 📢 LINE GROUP NOTIFICATION
 // =====================================================
-function notifyLineGroup(userId, prize, rewardCode) {
-  if (!LINE_GROUP_ID || LINE_GROUP_ID === 'YOUR_LINE_GROUP_ID') return;
+function notifyLineGroup(userId, prize, rewardCode, spinNumber) {
+  let groupId = LINE_GROUP_BY_PRIZE[prize.id];
+  if (!groupId || groupId.includes('GROUP_ID')) {
+    groupId = LINE_GROUP_ID;
+  }
 
   const shortId = userId.slice(-6);
+  const spinLabel = spinNumber ? `ครั้งที่ #${spinNumber}` : '';
   const msg = {
-    to: LINE_GROUP_ID,
+    to: groupId,
     messages: [{
       type: 'flex',
-      altText: `🎡 รางวัลใหม่! ${prize.emoji} ${prize.name}`,
+      altText: `🎡 [${spinLabel}] รางวัลใหม่! ${prize.emoji} ${prize.name}`,
       contents: {
         type: 'bubble',
         size: 'kilo',
@@ -330,60 +380,71 @@ function notifyLineGroup(userId, prize, rewardCode) {
           type: 'box', layout: 'horizontal',
           backgroundColor: '#0033CC', paddingAll: '12px',
           contents: [
-            { type:'text', text:'🎡', size:'xl', flex:0 },
-            { type:'text', text:' มีผู้รับรางวัลใหม่!', weight:'bold', color:'#FFD700', size:'sm', gravity:'center' }
+            { type:'text', text: prize.emoji, size:'xl', flex:0 },
+            { type:'text', text: ' มีผู้รับรางวัล!', weight:'bold', color:'#FFD700', size:'sm', gravity:'center' }
           ]
         },
         body: {
           type: 'box', layout: 'vertical', spacing: 'sm',
           contents: [
             {
-              type: 'box', layout: 'horizontal',
+              type:'box', layout:'horizontal',
+              contents: [
+                { type:'text', text:'🎯 ลำดับ:', size:'sm', color:'#888888', flex:2 },
+                { type:'text', text: spinLabel, size:'sm', weight:'bold', color:'#FFD700', flex:5 }
+              ]
+            },
+            {
+              type:'box', layout:'horizontal',
               contents: [
                 { type:'text', text:'รางวัล:', size:'sm', color:'#888888', flex:2 },
                 { type:'text', text:`${prize.emoji} ${prize.name}`, size:'sm', weight:'bold', flex:5 }
               ]
             },
             {
-              type: 'box', layout: 'horizontal',
+              type:'box', layout:'horizontal',
               contents: [
                 { type:'text', text:'รหัส:', size:'sm', color:'#888888', flex:2 },
-                { type:'text', text:rewardCode, size:'sm', weight:'bold', color:'#0033CC', flex:5 }
+                { type:'text', text: rewardCode, size:'sm', weight:'bold', color:'#0033CC', flex:5 }
               ]
             },
             {
-              type: 'box', layout: 'horizontal',
+              type:'box', layout:'horizontal',
+              contents: [
+                { type:'text', text:'เวลา:', size:'xs', color:'#888888', flex:2 },
+                { type:'text', text: new Date().toLocaleString('th-TH'), size:'xs', color:'#888888', flex:5 }
+              ]
+            },
+            {
+              type:'box', layout:'horizontal',
               contents: [
                 { type:'text', text:'User:', size:'xs', color:'#888888', flex:2 },
                 { type:'text', text:'...'+shortId, size:'xs', color:'#888888', flex:5 }
               ]
-            },
-            {
-              type: 'box', layout: 'horizontal',
-              contents: [
-                { type:'text', text:'เวลา:', size:'xs', color:'#888888', flex:2 },
-                { type:'text', text:new Date().toLocaleString('th-TH'), size:'xs', color:'#888888', flex:5 }
-              ]
             }
           ]
-        },
-        styles: { header:{ separator:false }, body:{ separator:true } }
+        }
       }
     }]
   };
 
   UrlFetchApp.fetch('https://api.line.me/v2/bot/message/push', {
     method: 'post',
-    headers: { 'Content-Type':'application/json', 'Authorization':'Bearer '+LINE_CHANNEL_TOKEN },
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': 'Bearer ' + LINE_CHANNEL_TOKEN
+    },
     payload: JSON.stringify(msg),
     muteHttpExceptions: true
   });
 }
 
+
 // =====================================================
 // LINE PERSONAL MESSAGE
 // =====================================================
-function sendLineMessage(userId, prize, rewardCode) {
+function sendLineMessage(userId, prize, rewardCode, spinNumber) {
+  const spinLabel = spinNumber ? `ลำดับการออกรางวัลครั้งที่ #${spinNumber}` : '';
   const payload = {
     to: userId,
     messages: [{
@@ -393,7 +454,10 @@ function sendLineMessage(userId, prize, rewardCode) {
         type: 'bubble', size: 'mega',
         header: {
           type:'box', layout:'vertical', backgroundColor:'#0033CC', paddingAll:'16px',
-          contents: [{ type:'text', text:'🎡 วงล้อพาโชค', weight:'bold', size:'md', color:'#ffffff' }]
+          contents: [
+            { type:'text', text:'🎡 Ranger Live Wheel 2026', weight:'bold', size:'md', color:'#ffffff' },
+            { type:'text', text: spinLabel, size:'xs', color:'rgba(255,255,255,0.7)', margin:'sm' }
+          ]
         },
         body: {
           type:'box', layout:'vertical', spacing:'md',
@@ -422,7 +486,7 @@ function sendLineMessage(userId, prize, rewardCode) {
 
   UrlFetchApp.fetch('https://api.line.me/v2/bot/message/push', {
     method:'post',
-    headers:{ 'Content-Type':'application/json', 'Authorization':'Bearer '+LINE_CHANNEL_TOKEN },
+    headers:{ 'Content-Type':'application/json', 'Authorization':'Bearer ' + LINE_CHANNEL_TOKEN },
     payload:JSON.stringify(payload),
     muteHttpExceptions:true
   });
@@ -432,7 +496,7 @@ function sendLineMessage(userId, prize, rewardCode) {
 // CONFIG
 // =====================================================
 function getConfig() {
-  const rows = SpreadsheetApp.openById(SHEET_ID)
+  const rows = SpreadsheetApp.openById(SHEET_FILEID)
     .getSheetByName(SHEET_CONFIG).getDataRange().getValues();
   const cfg = {};
   rows.slice(1).forEach(r => { if(r[0]) cfg[r[0]] = r[1]; });
@@ -440,7 +504,7 @@ function getConfig() {
 }
 
 function setConfigValue(key, value) {
-  const sheet = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_CONFIG);
+  const sheet = SpreadsheetApp.openById(SHEET_FILEID).getSheetByName(SHEET_CONFIG);
   const rows  = sheet.getDataRange().getValues();
   for (let i=1;i<rows.length;i++) {
     if (rows[i][0] === key) { sheet.getRange(i+1,2).setValue(value); return { success:true }; }
@@ -455,7 +519,7 @@ function setExpiryDate(date) { return setConfigValue('expiryDate', date); }
 // ADMIN STATS
 // =====================================================
 function getAdminStats() {
-  const ss          = SpreadsheetApp.openById(SHEET_ID);
+  const ss          = SpreadsheetApp.openById(SHEET_FILEID);
   const prizesSheet = ss.getSheetByName(SHEET_PRIZES);
   const playerRows  = ss.getSheetByName(SHEET_PLAYERS).getDataRange().getValues();
   const config      = getConfig();
@@ -473,7 +537,7 @@ function getAdminStats() {
   const activePlayers = playerRows.slice(1).filter(r => r[7] !== 'cancelled');
   const recentPlayers = activePlayers.slice(-10).reverse().map(r => ({
     userId:r[0], prizeName:r[2], rewardCode:r[3],
-    timestamp:r[4], status:r[6]
+    timestamp:r[4], status:r[6], spinNumber:r[8]
   }));
 
   // Prize distribution for chart
@@ -495,7 +559,7 @@ function getAdminStats() {
 // EXPORT CSV
 // =====================================================
 function exportPlayersCSV() {
-  const rows = SpreadsheetApp.openById(SHEET_ID)
+  const rows = SpreadsheetApp.openById(SHEET_FILEID)
     .getSheetByName(SHEET_PLAYERS).getDataRange().getValues();
   const csv = rows.map(r => r.map(c => `"${c}"`).join(',')).join('\n');
   return { success:true, csv };
@@ -505,7 +569,7 @@ function exportPlayersCSV() {
 // RESET
 // =====================================================
 function resetCampaign() {
-  const sheet = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_PRIZES);
+  const sheet = SpreadsheetApp.openById(SHEET_FILEID).getSheetByName(SHEET_PRIZES);
   const rows  = sheet.getDataRange().getValues();
   for (let i=1;i<rows.length;i++) {
     if (!rows[i][0]) continue;
@@ -520,7 +584,7 @@ function resetCampaign() {
 // =====================================================
 function logAction(type, message) {
   try {
-    SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_LOG)
+    SpreadsheetApp.openById(SHEET_FILEID).getSheetByName(SHEET_LOG)
       .appendRow([new Date(), type, message]);
   } catch(e) {}
 }
@@ -529,7 +593,7 @@ function logAction(type, message) {
 // SETUP — รันครั้งเดียว
 // =====================================================
 function setupSheets() {
-  const ss = SpreadsheetApp.openById(SHEET_ID);
+  const ss = SpreadsheetApp.openById(SHEET_FILEID);
 
   // prizes
   let s = ss.getSheetByName(SHEET_PRIZES) || ss.insertSheet(SHEET_PRIZES);
@@ -543,20 +607,25 @@ function setupSheets() {
     [5,'GWP','ไอเท็มช่วยชาย','⭐','#FF8800',10,10,25,true]
   ]);
 
-  // players (col H = active/cancelled)
+  // players (col H = active/cancelled, col I = spinNumber)
   s = ss.getSheetByName(SHEET_PLAYERS) || ss.insertSheet(SHEET_PLAYERS);
   s.clearContents();
-  s.getRange(1,1,1,8).setValues([['lineUserId','displayName','prizeName','rewardCode','timestamp','prizeId','status','activeFlag']]);
+  s.getRange(1,1,1,9).setValues([['lineUserId','displayName','prizeName','rewardCode','timestamp','prizeId','status','activeFlag','spinNumber']]);
 
   // config
   s = ss.getSheetByName(SHEET_CONFIG) || ss.insertSheet(SHEET_CONFIG);
   s.clearContents();
   s.getRange(1,1,1,2).setValues([['key','value']]);
   s.getRange(2,1,5,2).setValues([
-    ['campaignName','วงล้อพาโชค Affiliate'],
+    ['campaignName','RangerLiveWheel2026May'],
     ['expiryDate','2025-12-31'],
     ['tokenMins','10'],
-    ['liffUrl','https://liff.line.me/2010102212-BxhzRPQ9'],
+
+    //Live Wheel
+    //['liffUrl','https://liff.line.me/2010102212-BxhzRPQ9'],
+    //Lucky Wheel
+    ['liffUrl','https://liff.line.me/2010096405-zr8CsSer'],
+    
     ['adminPassword',ADMIN_PASSWORD]
   ]);
 
