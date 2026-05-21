@@ -155,12 +155,11 @@
     <div class="login-sub">Ranger Live Wheel — ระบบหลังบ้าน</div>
     
     <input class="login-input" type="password" id="pw-input" placeholder="รหัสผ่าน" onkeydown="if(event.key==='Enter')login()">
-
-    <!-- <input class="login-input" type="password" id="pw-input" 
+    <!--input class="login-input" type="password" id="pw-input" 
       placeholder="รหัสผ่าน" 
       oninput="document.getElementById('login-showpw').textContent = this.value"
-      onkeydown="if(event.key==='Enter') login()"> -->    
-    <!-- <div class="login-pw" id="login-showpw">แสดงรหัสผ่านตรงนี้</div> -->
+      onkeydown="if(event.key==='Enter') login()">
+    <div class="login-pw" id="login-showpw">แสดงรหัสผ่านตรงนี้</div-->    
     
     <button class="login-btn" onclick="login()">เข้าสู่ระบบ</button>
     <div class="login-error" id="login-error">รหัสผ่านไม่ถูกต้อง</div>
@@ -221,6 +220,7 @@
         <table>
           <thead>
             <tr>
+              <th>#</th>
               <th>Line User ID</th>
               <th>รางวัล</th>
               <th>รหัส</th>
@@ -366,8 +366,9 @@ const LINE_GROUP_ID = 'C1234567890abcdef...';
 
 <script>
 const ADMIN_CONFIG = {
-  APPS_SCRIPT_URL: 'https://script.google.com/macros/s/AKfycbyi4G4kURShP-wks_KLkVn6_j3R_K0oyfefHpAFWAN4_QXK7BBL-DExTOvrZusyBv62Pw/exec',
-  PASSWORD: ''
+  //APPS_SCRIPT_URL: 'https://script.google.com/macros/s/AKfycbyi4G4kURShP-wks_KLkVn6_j3R_K0oyfefHpAFWAN4_QXK7BBL-DExTOvrZusyBv62Pw/exec',
+  APPS_SCRIPT_URL: 'https://script.google.com/macros/s/AKfycbzJE_C-A8WFW9Ys4UoIfguQK65_K5xpgLUKW-5dR-NQs_o40Z0cpUaPNfTwmvOXyGcPrA/exec',
+  PASSWORD: 'admin1234'
 };
 
 let statsData=null, allPlayers=[], prizeChartInst=null, stockChartInst=null;
@@ -382,7 +383,6 @@ function login(){
   document.getElementById('login-error').style.display='none';
   loadStats();
 }
-  
 function logout(){
   ADMIN_CONFIG.PASSWORD='';
   document.getElementById('dashboard').style.display='none';
@@ -473,9 +473,10 @@ function renderPrizes(prizes){
 // =====================================================
 function renderPlayers(players){
   const tbody=document.getElementById('players-table');
-  if(!players||!players.length){tbody.innerHTML='<tr><td colspan="6" class="empty-state">ยังไม่มีผู้เล่น</td></tr>';return}
+  if(!players||!players.length){tbody.innerHTML='<tr><td colspan="7" class="empty-state">ยังไม่มีผู้เล่น</td></tr>';return}
   tbody.innerHTML=players.map(p=>`
     <tr>
+      <td style="text-align:center;font-weight:800;color:var(--gold)">${p.spinNumber||'–'}</td>
       <td style="font-family:monospace;font-size:0.75rem;color:var(--text-muted)">${maskId(p.userId)}</td>
       <td>${p.prizeName}</td>
       <td><span class="code-mono">${p.rewardCode}</span></td>
